@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Beam Fleet Parking Management - Light Mode</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://unpkg.com/mqtt@5.3.6/dist/mqtt.min.js"></script>
+
+<style>
+    body {
+        margin:0; padding:0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background:#f4f7f6; /* Latar belakang abu-abu sangat muda */
+        color:#2d3436; /* Teks utama gelap */
+        overflow:hidden;
+    }
+
+    /* --- SIDEBAR LIGHT --- */
+    #sidebar {
+        width:260px;
+        background:#ffffff;
+        height:100vh;
+        position:fixed;
+        left:0; top:0;
+        display:flex;
+        flex-direction:column;
+        border-right:1px solid #d1d8e0;
+        padding:20px;
+        box-sizing:border-box;
+        box-shadow: 2px 0 5px rgba(0,0,0,0.05);
+        z-index: 1001;
+    }
+
+    #sidebar h2 {
+        font-size:20px;
+        margin-bottom:25px;
+        text-align:center;
+        letter-spacing:0.5px;
+        color:#0984e3; /* Aksen Biru */
+        font-weight: 700;
+    }
+
+    .menu-btn {
+        width:100%;
+        background:#f1f2f6;
+        padding:12px 14px;
+        margin-bottom:12px;
+        border:1px solid #e1e2e6;
+        border-radius:8px;
+        text-align:left;
+        cursor:pointer;
+        font-size:14px;
+        color:#2d3436;
+        transition:0.2s;
+        font-weight: 500;
+    }
+    .menu-btn:hover { 
+        background:#e1f5fe; 
+        color:#0984e3; 
+        border-color: #0984e3;
+    }
+    .menu-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* --- MAP --- */
+    #map {
+        margin-left:260px;
+        height:100vh;
+        width:calc(100% - 260px);
+        background: #e5e3df;
+    }
+
+    /* Floating Add Controls */
+    #add-controls {
+        position:absolute;
+        bottom:25px;
+        left:50%;
+        transform:translateX(-50%);
+        background:#ffffff;
+        padding:12px 24px;
+        display:none;
+        border-radius:50px;
+        gap:15px;
+        z-index:9999;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+        border: 1px solid #0984e3;
+    }
+
+    #add-controls button {
+        background:#0984e3;
+        border:none;
+        padding:8px 20px;
+        border-radius:20px;
+        font-size:14px;
+        cursor:pointer;
+        font-weight:600;
+        color:#fff;
+    }
+
+    #add-controls #cancel { background:#ff7675; color:white; }
+
+    /* Right Drawer Light */
+    #zone-drawer {
+        width:350px;
+        height:100vh;
+        background:#ffffff;
+        position:fixed;
+        right:-350px;
+        top:0;
+        transition:0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        padding:20px;
+        border-left:1px solid #d1d8e0;
+        box-sizing:border-box;
+        overflow-y:auto;
+        z-index:10000;
+        box-shadow: -2px 0 10px rgba(0,0,0,0.05);
+    }
+
+    #zone-drawer.open { right:0; }
+    #zone-drawer h3 { color: #2d3436; margin-top: 0; }
+
+    .zone-item {
+        background:#f8f9fa;
+        padding:15px;
+        margin:10px 0;
+        border-radius:10px;
+        display:flex;
+        flex-direction: column;
+        gap: 10px;
+        border: 1px solid #e9ecef;
+    }
+
+    .zone-info { display: flex; justify-content: space-between; align-items: center; color: #2d3436; }
+
+    .zone-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+    .zone-item button {
+        background:#ffffff;
+        border:1px solid #ced4da;
+        padding:6px 12px;
+        border-radius:6px;
+        cursor:pointer;
+        color:#495057;
+        font-size: 12px;
+        transition: 0.2s;
+    }
+    .zone-item button:hover { background: #e9ecef; border-color: #adb5bd; }
+
+    /* Log panel Light */
+    #log {
+        position:fixed;
+        bottom:20px;
+        left:280px;
+        right: 20px;
+        height:150px;
+        background:rgba(255, 255, 255, 0.95);
+        border:1px solid #d1d8e0;
+        border-radius: 12px;
+        overflow-y:auto;
+        padding:15px;
+        display:none;
+        z-index:5000;
+        font-family: 'Consolas', monospace;
+        font-size: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        color: #2d3436;
+    }
+
+    #status { margin-top: 15px; font-size: 13px; font-weight: 600; padding: 10px; border-radius: 6px; background: #f1f2f6; text-align: center;}
+    .status-connected { color: #2ecc71; border-left: 4px solid #2ecc71; }
+    .status-disconnected { color: #e74c3c; border-left: 4px solid #e74c3c; }
+
+    hr { border: 0; border-top: 1px solid #eee; margin: 15px 0; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2>Beam Fleet</h2>
+
+    <button class="menu-btn" id="add-zone">➕ Add Parking Zone</button>
+    <button class="menu-btn" id="zone-list-btn">📄 Zone List</button>
+    <button class="menu-btn" id="toggle-zone">👁 Toggle Map Zones</button>
+    <button class="menu-btn" id="toggle-log">📝 Toggle Log Panel</button>
+    <button class="menu-btn" id="sync-bikes">🚲 Sync to Bikes (MQTT)</button>
+    <button class="menu-btn" id="export-json">📥 Export to JSON</button>
+
+    <div id="status" class="status-disconnected">MQTT: Disconnected</div>
+</div>
+
+<div id="map"></div>
+
+<div id="add-controls">
+    <button id="finish">Finish & Save</button>
+    <button id="cancel">Cancel</button>
+</div>
+
+<div id="zone-drawer">
+    <div style="display:flex; justify-content: space-between; align-items: center;">
+        <h3>Parking Zones</h3>
+        <button onclick="document.getElementById('zone-drawer').classList.remove('open')" style="background:none; border:none; color:#95a5a6; cursor:pointer; font-size: 20px;">✕</button>
+    </div>
+    <hr>
+    <div id="zone-list"></div>
+</div>
+
+<div id="log">
+    <div style="color: #0984e3; font-weight: bold; border-bottom: 1px solid #eee; padding-bottom: 8px; margin-bottom: 10px; display: flex; justify-content: space-between;">
+        <span>SYSTEM LOG PANEL</span>
+        <span onclick="document.getElementById('log').style.display='none'" style="cursor:pointer">✕</span>
+    </div>
+    <div id="log-content"></div>
+</div>
+
+<script>
+// --- KONFIGURASI FIREBASE SAMA ---
+const firebaseConfig = {
+    apiKey: "AIzaSyD5VOw3zHlQ_hgCV62PVsRLp8YZLtGRug",
+    authDomain: "beam-geofence.firebaseapp.com",
+    databaseURL: "https://beam-geofence-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "beam-geofence",
+    storageBucket: "beam-geofence.appspot.com",
+    messagingSenderId: "898272431786",
+    appId: "1:898272431786:web:7199fc61893c0a51724ad3"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// --- MAP DENGAN TILE LIGHT ---
+// Menggunakan CartoDB Positron (Light) sebagai ganti Dark Matter
+const map = L.map('map').setView([-6.9716, 107.6377], 14);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { 
+    maxZoom:20,
+    attribution: '&copy; OpenStreetMap &copy; CARTO'
+}).addTo(map);
+
+const zonesLayer = L.layerGroup().addTo(map);
+
+// --- LOG & STATUS ---
+const logContent = document.getElementById("log-content");
+const statusEl = document.getElementById("status");
+
+function addLog(msg, level = 'info') {
+    const p = document.createElement("div");
+    p.style.marginBottom = "4px";
+    const time = new Date().toLocaleTimeString();
+    
+    let color = "#636e72"; // Default grey
+    if (level === 'error') color = '#d63031';
+    if (level === 'success') color = '#27ae60';
+    if (level === 'incoming') color = '#0984e3';
+    
+    p.innerHTML = `<span style="color:#b2bec3">[${time}]</span> <span style="color:${color}">${msg}</span>`;
+    logContent.appendChild(p);
+    document.getElementById("log").scrollTop = document.getElementById("log").scrollHeight;
+}
+
+// --- MQTT ---
+const client = mqtt.connect("wss://broker.hivemq.com:8884/mqtt");
+
+client.on("connect", () => {
+    addLog("MQTT Bridge Connected (WSS)", 'success');
+    statusEl.textContent = "MQTT: Connected";
+    statusEl.className = "status-connected";
+    client.subscribe("beam/geofence/upload");
+});
+
+client.on("message", (topic, message) => {
+    if (topic === "beam/geofence/upload") {
+        try {
+            const json = JSON.parse(message.toString());
+            addLog(`INCOMING: ${json.command}`, 'incoming');
+            
+            if (json.command === "SYNC_GEOFENCES" && json.data) {
+                if (confirm(`ESP32 mengirim ${json.data.length} zona. Timpa data di Firebase?`)) {
+                    const update = {};
+                    json.data.forEach(z => {
+                        const targetId = z.id || db.ref().child('zones').push().key;
+                        update[targetId] = { name: z.name || "Unnamed", points: z.coords };
+                    });
+                    db.ref("zones").set(update).then(() => {
+                        addLog("Firebase Overwritten by ESP32 Data", 'success');
+                    });
+                }
+            }
+        } catch (e) { addLog("JSON Parse Error", "error"); }
+    }
+});
+
+// --- DATA HANDLING ---
+let zones = {};
+let showZones = true;
+
+db.ref("zones").on("value", snap => {
+    zones = snap.val() || {};
+    addLog(`Sync: ${Object.keys(zones).length} zones loaded`);
+    renderZones();
+    renderList();
+});
+
+function renderZones() {
+    zonesLayer.clearLayers();
+    if (!showZones) return;
+    Object.values(zones).forEach(z => {
+        if (z.points && z.points.length >= 3) {
+            L.polygon(z.points, {
+                color:"#0984e3",
+                weight:2,
+                fillColor: "#0984e3",
+                fillOpacity:.15
+            }).addTo(zonesLayer).bindPopup(`<b>${z.name}</b>`);
+        }
+    });
+}
+
+function renderList() {
+    const box = document.getElementById("zone-list");
+    box.innerHTML = "";
+    Object.entries(zones).forEach(([id, z]) => {
+        const div = document.createElement("div");
+        div.className = "zone-item";
+        div.innerHTML = `
+            <div class="zone-info">
+                <span><b>${z.name}</b></span>
+                <span style="font-size:11px; color:#b2bec3;">${z.points ? z.points.length : 0} pts</span>
+            </div>
+            <div class="zone-actions">
+                <button onclick="zoomToZone('${id}')">📍 View</button>
+                <button onclick="renameZone('${id}')">✏️</button>
+                <button onclick="deleteZone('${id}')" style="color:#d63031; border-color:#fab1a0;">🗑️</button>
+            </div>
+        `;
+        box.appendChild(div);
+    });
+}
+
+window.zoomToZone = id => {
+    const z = zones[id];
+    if (z && z.points) {
+        map.fitBounds(L.latLngBounds(z.points));
+        if(window.innerWidth < 768) document.getElementById("zone-drawer").classList.remove("open");
+    }
+};
+
+window.renameZone = id => {
+    const n = prompt("New Name:", zones[id].name);
+    if (n) db.ref("zones/" + id).update({ name: n });
+};
+
+window.deleteZone = id => {
+    if (confirm(`Delete ${zones[id].name}?`)) db.ref("zones/" + id).remove();
+};
+
+// --- ADD ZONE LOGIC ---
+let adding = false; let points = []; let markers = []; let tempLine = null;
+
+document.getElementById("add-zone").onclick = () => {
+    adding = true; points = []; markers = [];
+    document.getElementById("add-controls").style.display = "flex";
+    addLog("Add Mode: Click on map to define points", 'info');
+};
+
+map.on("click", e => {
+    if (!adding) return;
+    const p = [e.latlng.lat, e.latlng.lng];
+    points.push(p);
+    const m = L.circleMarker(e.latlng, {radius:5, color:"#0984e3", fillColor:"#fff", fillOpacity:1, weight:2}).addTo(map);
+    markers.push(m);
+    if (tempLine) map.removeLayer(tempLine);
+    if (points.length > 1) tempLine = L.polyline(points, {color:"#0984e3", weight:2, dashArray:"5,8"}).addTo(map);
+});
+
+document.getElementById("cancel").onclick = () => {
+    adding = false; 
+    markers.forEach(m => map.removeLayer(m));
+    if (tempLine) map.removeLayer(tempLine);
+    document.getElementById("add-controls").style.display = "none";
+};
+
+document.getElementById("finish").onclick = () => {
+    if (points.length < 3) return alert("Select at least 3 points!");
+    const name = prompt("Zone Name:");
+    if (!name) return;
+    db.ref("zones").push({ name, points });
+    document.getElementById("cancel").click();
+};
+
+// --- UI CONTROLS ---
+document.getElementById("zone-list-btn").onclick = () => document.getElementById("zone-drawer").classList.toggle("open");
+document.getElementById("toggle-zone").onclick = () => { showZones = !showZones; renderZones(); };
+document.getElementById("toggle-log").onclick = () => {
+    const l = document.getElementById("log");
+    l.style.display = (l.style.display === "block" ? "none" : "block");
+};
+document.getElementById("export-json").onclick = () => {
+    const data = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(zones, null, 2));
+    const a = document.createElement('a'); a.href = data; a.download = "beam_export.json"; a.click();
+};
+
+document.getElementById("sync-bikes").onclick = () => {
+    const arr = Object.entries(zones).map(([id, z]) => ({ id, name: z.name, coords: z.points }));
+    const payload = JSON.stringify({ command: "SYNC_GEOFENCES", data: arr, timestamp: Date.now() });
+    client.publish('beam/geofence/sync', payload, { qos: 1 }, (err) => {
+        if (!err) addLog(`Synced ${arr.length} zones to MQTT`, 'success');
+    });
+};
+</script>
+
+</body>
+</html>
